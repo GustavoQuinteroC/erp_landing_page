@@ -1,8 +1,755 @@
 <?php
 $NOINDEX = false;
 
-require_once __DIR__ . '/_erp.php';
-require_once __DIR__ . '/_seo.php';
+// Contacto institucional. Se define antes de cargar el kit: el kit solo
+// define estas constantes si no existen.
+define('ALKES_MAIL',    'soporte@alkes.mx');
+define('ALKES_TEL',     '+523339460097');
+define('ALKES_TEL_TXT', '333 946 0097');
+
+
+if (!defined('ER_SITIO'))     { define('ER_SITIO', 'https://erp.alkes.mx'); }
+if (!defined('ER_APP'))       { define('ER_APP', 'https://app.erp.alkes.mx'); }
+if (!defined('ER_WHATSAPP'))  { define('ER_WHATSAPP', 'https://wa.me/523339460097'); }
+
+/** Redes oficiales de Alkes. */
+function er_redes()
+{
+    return array(
+        array('n' => 'Facebook',  'u' => 'https://www.facebook.com/alkes.mx'),
+        array('n' => 'Instagram', 'u' => 'https://www.instagram.com/alkes.mx'),
+        array('n' => 'LinkedIn',  'u' => 'https://www.linkedin.com/company/alkes-mx'),
+        array('n' => 'TikTok',    'u' => 'https://www.tiktok.com/@alkes.mx'),
+    );
+}
+
+/** Mensaje de partida para pedir una demostración guiada. */
+function er_url_agendar()
+{
+    return 'mailto:' . ALKES_MAIL . '?subject=' . rawurlencode('Demostración guiada de Alkes ERP');
+}
+
+/** Logo en dos versiones; el CSS muestra la que corresponde al tema. */
+function er_logo($px = 34)
+{
+    $px = (int) $px;
+    return '<img class="logo logo--claro" src="assets/img/logo.png" alt="" width="' . $px . '" height="' . $px . '">'
+         . '<img class="logo logo--oscuro" src="assets/img/logo-blanco.png" alt="" width="' . $px . '" height="' . $px . '">';
+}
+
+/**
+ * Captura dentro de una ventana de navegador. Si existe la versión oscura se
+ * pintan las dos y el CSS muestra la del tema activo.
+ */
+function er_ventana($archivo, $alt, $w, $h, $url = 'app.erp.alkes.mx', $carga = 'lazy')
+{
+    $existe = is_file(__DIR__ . '/' . $archivo);
+    $osc    = preg_replace('/\.(png|jpe?g|webp)$/i', '-oscuro.$1', $archivo);
+    $hayOsc = $osc !== $archivo && is_file(__DIR__ . '/' . $osc);
+    $o  = '<figure class="win">';
+    $o .= '<div class="win__bar"><span class="win__dots" aria-hidden="true"><i></i><i></i><i></i></span>';
+    $o .= '<span class="win__url">' . a_e($url) . '</span></div>';
+    $o .= '<div class="win__shot" style="--ar:' . (int) $w . ' / ' . (int) $h . '">';
+    if ($existe) {
+        $o .= '<img src="' . a_e($archivo) . '" alt="' . a_e($alt) . '"' . ($hayOsc ? ' data-tema-img="claro"' : '')
+            . ' width="' . (int) $w . '" height="' . (int) $h . '" loading="' . a_e($carga) . '" decoding="async">';
+        if ($hayOsc) {
+            $o .= '<img src="' . a_e($osc) . '" alt="' . a_e($alt) . '" data-tema-img="oscuro"'
+                . ' width="' . (int) $w . '" height="' . (int) $h . '" loading="' . a_e($carga) . '" decoding="async">';
+        }
+    } else {
+        $o .= '<div class="win__falta"><b>Captura pendiente</b><code>' . a_e($archivo) . '</code></div>';
+    }
+    return $o . '</div></figure>';
+}
+
+/** Tarifa por usuario (tarifa.json): el descuento sube 1% por cada usuario adicional hasta el tope, y aplica al precio de todos. */
+function er_tarifa()
+{
+    static $t = null;
+    if ($t !== null) { return $t; }
+    $t = array('anual_meses' => 10, 'base' => 500, 'paso' => 0.01, 'tope_descuento' => 0.5);
+    $f = __DIR__ . '/tarifa.json';
+    if (is_file($f)) {
+        $j = json_decode((string) @file_get_contents($f), true);
+        if (is_array($j) && !empty($j['base'])) { $t = $j + $t; }
+    }
+    return $t;
+}
+
+/** Mensualidad para $n usuarios: descuento de (n-1) × paso, con tope; el precio por usuario va a centavos. */
+function er_calcular($n)
+{
+    $n = max(1, (int) $n);
+    $t = er_tarifa();
+    $d = min((float) $t['tope_descuento'], ($n - 1) * (float) $t['paso']);
+    $precio = round((float) $t['base'] * (1 - $d), 2);
+    return array('total' => round($n * $precio, 2), 'precio' => $precio, 'n' => $n, 'descuento' => $d);
+}
+
+/** Precio por usuario más alto (calculadora y checkout; la publicidad no lo cita). */
+function er_tarifa_max()
+{
+    return (float) er_tarifa()['base'];
+}
+
+/** Precio por usuario más bajo (el que se anuncia). */
+function er_tarifa_min()
+{
+    $t = er_tarifa();
+    return round((float) $t['base'] * (1 - (float) $t['tope_descuento']), 2);
+}
+
+/** Usuario desde el que aplica el descuento máximo. */
+function er_tarifa_tope_usuarios()
+{
+    $t = er_tarifa();
+    return (int) ceil((float) $t['tope_descuento'] / (float) $t['paso']) + 1;
+}
+
+/** Sección de precios: explicación y calculadora. Sin JS se ve la explicación. */
+function er_tarifas_html($url_base)
+{
+    $t = er_tarifa();
+    $meses = (int) $t['anual_meses'];
+    $pct = rtrim(rtrim(number_format((float) $t['paso'] * 100, 2, '.', ''), '0'), '.');
+    $top = (int) round((float) $t['tope_descuento'] * 100);
+    $h  = '<div class="tarifa" data-tarifa="' . a_e(json_encode($t, JSON_UNESCAPED_UNICODE)) . '" data-url="' . a_e($url_base) . '">';
+
+    $h .= '<div class="tarifa__card"><p class="eyebrow">Precio por usuario</p>';
+    $h .= '<p class="tarifa__desde"><small>Desde</small><b>$' . a_num(er_tarifa_min()) . '</b><small>MXN por usuario al mes</small></p>';
+    $h .= '<h3>Más usuarios, menos pagas por cada uno</h3>';
+    $h .= '<ul class="tarifa__reglas">';
+    $h .= '<li>' . a_icon('check') . 'Cada usuario adicional baja ' . $pct . '% el precio de todos tus usuarios.</li>';
+    $h .= '<li>' . a_icon('check') . 'Arriba de ' . (er_tarifa_tope_usuarios() - 1) . ' usuarios, obtienes el descuento máximo de ' . $top . '%.</li>';
+    $h .= '<li>' . a_icon('check') . 'Incluye todas las áreas del sistema, el soporte, las actualizaciones y la implantación. Sin módulos de pago.</li>';
+    $h .= '<li>' . a_icon('check') . 'Al sumar un usuario se cobra al momento la parte proporcional del periodo. Al reducir tus usuarios contratados, el cobro menor rige desde tu siguiente renovación.</li>';
+    $h .= '<li>' . a_icon('check') . 'Con el plan anual solo pagas ' . $meses . ' meses, y los otros ' . (12 - $meses) . ' son gratis.</li>';
+    $h .= '</ul></div>';
+
+    $h .= '<div class="tarifa__card tarifa__calc" hidden data-calc>';
+    $h .= '<p class="eyebrow">Calcula tu mensualidad</p>';
+    $h .= '<label class="tarifa__lbl" for="tarifa-n">¿Cuántos usuarios tendrás?</label>';
+    $h .= '<input class="tarifa__in" id="tarifa-n" type="number" inputmode="numeric" min="1" max="100000" value="1">';
+    $h .= '<div class="period period--sm" role="group" aria-label="Periodo de facturación">';
+    $h .= '<button type="button" data-per="mensual" aria-pressed="true">Mensual</button>';
+    $h .= '<button type="button" data-per="anual" aria-pressed="false">Anual<span class="save">−17%</span></button></div>';
+    $h .= '<ul class="tarifa__desg" data-desg></ul>';
+    $h .= '<p class="tarifa__tot"><span data-tot>$0</span><small data-per-txt>MXN al mes</small></p>';
+    $h .= '<p class="tarifa__prom muted" data-prom></p>';
+    $h .= '<a class="btn btn--primary btn--block" data-cta href="' . a_e($url_base) . '">Contratar' . a_icon('arrow') . '</a>';
+    $h .= '</div>';
+    $h .= '</div>';
+    return $h;
+}
+
+/** Diálogo con las credenciales del demo. */
+function er_dialogo_demo($url_app)
+{
+    $h  = '<dialog id="demoDialog" aria-labelledby="demoTitulo"><div class="dlg">';
+    $h .= '<h2 id="demoTitulo">Acceso al demo</h2>';
+    $h .= '<p>Entra a la empresa de demostración con estas credenciales. No captures información real.</p>';
+    $h .= '<dl class="dlg__creds"><div><dt>Usuario</dt><dd>demo@alkes.mx</dd></div>';
+    $h .= '<div><dt>Contraseña</dt><dd>Demo@Alkes2026</dd></div></dl>';
+    $h .= '<p>Para una demostración guiada escríbenos a <a href="' . a_e(er_url_agendar()) . '">' . ALKES_MAIL . '</a>, '
+        . 'llama al <a href="tel:' . ALKES_TEL . '">' . ALKES_TEL_TXT . '</a> o usa '
+        . '<a href="' . ER_WHATSAPP . '" target="_blank" rel="noopener">WhatsApp</a>.</p>';
+    $h .= '<div class="dlg__foot"><a class="btn btn--primary" href="' . a_e($url_app) . '" target="_blank" rel="noopener">Ir a la app' . a_icon('external') . '</a>';
+    $h .= '<button class="btn btn--line" type="button" data-close-demo>Cerrar</button></div>';
+    return $h . '</div></dialog>';
+}
+
+/** Preguntas frecuentes: la misma lista alimenta la sección y el JSON-LD. */
+function er_faq()
+{
+    return array(
+        array('q' => '¿Qué es Alkes ERP?',
+              'a' => 'Un sistema de gestión empresarial de Alkes que conecta ventas, compras, almacén, producción, finanzas y contabilidad, atención al cliente, proyectos y recursos humanos, con facturación electrónica CFDI 4.0 integrada.'),
+        array('q' => '¿Cuánto cuesta?',
+              'a' => er_faq_precio() . ' Incluye todas las áreas del sistema.'),
+        array('q' => '¿Cómo se calcula mi mensualidad?',
+              'a' => er_faq_calculo()),
+        array('q' => '¿Qué pasa si agrego o quito usuarios a mitad del periodo?',
+              'a' => er_faq_altas()),
+        array('q' => '¿Qué incluye el precio?',
+              'a' => 'Todas las áreas del sistema, el soporte, las actualizaciones y la implantación. El precio depende solo del número de usuarios con cuenta activa.'),
+        array('q' => '¿Hay módulos o ediciones de pago aparte?',
+              'a' => 'No. Todas las áreas del sistema están incluidas y el precio depende solo del número de usuarios; tú decides qué usuario tiene qué permisos.'),
+        array('q' => '¿Emite facturas CFDI 4.0?',
+              'a' => 'Sí. La factura nace de la venta registrada en el sistema y se timbra ante el SAT a través de PAC desde la misma pantalla. Cada operación de timbrado queda en una bitácora. También maneja complementos de pago y notas de crédito.'),
+        array('q' => '¿Qué áreas incluye?',
+              'a' => 'Ventas (con punto de venta), compras, almacén, producción, contratos, finanzas (cuentas por cobrar y por pagar, gastos, tesorería, contabilidad e impuestos), atención al cliente, proyectos, recursos humanos, reportes y parámetros.'),
+        array('q' => '¿Controla lotes y números de serie?',
+              'a' => 'Sí. El movimiento de inventario conserva el lote y el número de serie de cada partida, y hay un reporte de trazabilidad de lote.'),
+        array('q' => '¿Sirve para varias sucursales?',
+              'a' => 'Sí. Se configuran la empresa y sus sucursales, cada una con sus usuarios y permisos.'),
+        array('q' => '¿Cuántos reportes trae?',
+              'a' => '153 reportes en 14 categorías, de ventas, compras, almacén, producción, cartera, tesorería, contabilidad e impuestos (incluida la DIOT), entre otras.'),
+        array('q' => '¿Hay que instalar algo?',
+              'a' => 'No. Se usa desde el navegador, en la computadora o en el celular.'),
+        array('q' => '¿Puedo probarlo?',
+              'a' => 'Sí, con el demo y sus credenciales de prueba.'),
+    );
+}
+
+/** Datos estructurados. Todo sale de lo que la página dice; sin reseñas ni calificaciones. */
+function er_jsonld($seo = array())
+{
+    $ofertas = array(
+        '@type' => 'AggregateOffer',
+        'priceCurrency' => 'MXN',
+        'lowPrice' => (string) er_tarifa_min(),
+        'highPrice' => (string) er_tarifa_max(),
+        'url' => ER_SITIO . '/#precios',
+    );
+    $faq = array();
+    foreach (er_faq() as $f) {
+        $faq[] = array('@type' => 'Question', 'name' => $f['q'],
+                       'acceptedAnswer' => array('@type' => 'Answer', 'text' => $f['a']));
+    }
+    $redes = array();
+    foreach (er_redes() as $r) { $redes[] = $r['u']; }
+
+    $g = array(
+        '@context' => 'https://schema.org',
+        '@graph' => array(
+            array('@type' => 'Organization', '@id' => ALKES_SITIO . '/#org', 'name' => 'Alkes', 'url' => ALKES_SITIO,
+                  'email' => ALKES_MAIL, 'telephone' => ALKES_TEL, 'sameAs' => $redes),
+            array('@type' => 'WebSite', '@id' => ER_SITIO . '/#web', 'name' => 'Alkes ERP', 'url' => ER_SITIO . '/',
+                  'inLanguage' => 'es-MX', 'publisher' => array('@id' => ALKES_SITIO . '/#org')),
+            array('@type' => 'SoftwareApplication', '@id' => ER_SITIO . '/#app', 'name' => 'Alkes ERP',
+                  'applicationCategory' => 'BusinessApplication', 'operatingSystem' => 'Web',
+                  'description' => 'ERP en la nube con ventas, compras, almacén, producción, finanzas y contabilidad, atención al cliente, proyectos y recursos humanos, con facturación CFDI 4.0.',
+                  'url' => ER_SITIO . '/', 'inLanguage' => 'es-MX', 'image' => ER_SITIO . '/assets/img/og-image.png',
+                  'publisher' => array('@id' => ALKES_SITIO . '/#org'), 'offers' => $ofertas),
+            array('@type' => 'FAQPage', '@id' => ER_SITIO . '/#faq', 'mainEntity' => $faq),
+        ),
+    );
+    $g = seo_enriquecer($g, $seo);
+    return json_encode($g, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG);
+}
+
+/** Texto de precio para las preguntas frecuentes. */
+function er_faq_precio()
+{
+    $t = er_tarifa();
+    $pct = rtrim(rtrim(number_format((float) $t['paso'] * 100, 2, '.', ''), '0'), '.');
+    return 'Desde $' . a_num(er_tarifa_min()) . ' MXN por usuario al mes. Se cobra por usuario con cuenta activa, y cada usuario adicional baja ' . $pct . '% el precio de todos hasta llegar a ' . (int) round((float) $t['tope_descuento'] * 100) . '% de descuento arriba de ' . (er_tarifa_tope_usuarios() - 1) . ' usuarios. Con el plan anual solo pagas ' . (int) $t['anual_meses'] . ' meses, y los otros ' . (12 - (int) $t['anual_meses']) . ' son gratis.';
+}
+
+function er_faq_calculo()
+{
+    $c15 = er_calcular(15); $c50 = er_calcular(50);
+    return 'Todos tus usuarios pagan el mismo precio, que baja con cada usuario que sumas. Con 15 usuarios son 15 × $' . a_num($c15['precio']) . ' = $' . a_num($c15['total']) . ' MXN al mes; con 50 usuarios son 50 × $' . a_num($c50['precio']) . ' = $' . a_num($c50['total']) . ' MXN al mes. La calculadora de la sección de precios te da el total exacto.';
+}
+
+function er_faq_altas()
+{
+    return 'Al sumar un usuario se cobra al momento la parte proporcional hasta tu próxima factura, y desde la siguiente el precio por usuario se ajusta a tu nuevo total. Desactivar un usuario libera su lugar para otra persona, pero no cambia el cobro: para pagar menos, reduce tus usuarios contratados en Configuración y la reducción rige desde la siguiente renovación; no hay reembolso a mitad del periodo.';
+}
+
+if (!defined('ALKES_SITIO'))    { define('ALKES_SITIO', 'https://alkes.mx'); }
+if (!defined('ALKES_CENTRAL'))  { define('ALKES_CENTRAL', 'https://contratar.alkes.mx'); }
+if (!defined('ALKES_MAIL'))     { define('ALKES_MAIL', 'gquintero@alkes.mx'); }
+if (!defined('ALKES_TEL'))      { define('ALKES_TEL', '+523339460097'); }
+if (!defined('ALKES_TEL_TXT'))  { define('ALKES_TEL_TXT', '333 946 0097'); }
+
+/** Escape de todo dato que entre al HTML. */
+function a_e($s) { return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8'); }
+
+/**
+ * La familia completa. Alimenta la rejilla de ecosistema del pie.
+ * Orden fijo en las seis landings: la firma tiene que ser reconocible.
+ */
+function a_familia()
+{
+    return array(
+        'smartpend' => array('nombre' => 'SmartPend', 'url' => 'https://smartpend.alkes.mx', 'que' => 'Pendientes y proyectos'),
+        'geocheck'  => array('nombre' => 'GeoCheck',  'url' => 'https://geocheck.alkes.mx',  'que' => 'Asistencia por ubicación'),
+        'mantis'    => array('nombre' => 'Mantis',    'url' => 'https://mantis.alkes.mx',    'que' => 'Mantenimiento de activos'),
+        'syspower'  => array('nombre' => 'SysPower',  'url' => 'https://syspower.alkes.mx',  'que' => 'Energía controlada a distancia'),
+        'erp'       => array('nombre' => 'Alkes ERP', 'url' => 'https://erp.alkes.mx',       'que' => 'Gestión empresarial y CFDI'),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Iconos. Trazo 1.75, viewBox 24×24, currentColor. Decorativos siempre.
+// ---------------------------------------------------------------------------
+function a_icon($nombre, $clase = '')
+{
+    static $d = null;
+    if ($d === null) { $d = array(
+    'arrow'      => '<path d="M5 12h14M13 6l6 6-6 6"/>',
+    'check'      => '<path d="M20 6 9 17l-5-5"/>',
+    'close'      => '<path d="M18 6 6 18M6 6l12 12"/>',
+    'chevron'    => '<path d="m6 9 6 6 6-6"/>',
+    'menu'       => '<path d="M4 7h16M4 12h16M4 17h16"/>',
+    'moon'       => '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/>',
+    'sun'        => '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+    'external'   => '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
+    'mail'       => '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3.5 7 7.6 5.3a1.6 1.6 0 0 0 1.8 0L20.5 7"/>',
+    'phone'      => '<path d="M7 3h3l2 5-2.5 1.5a12 12 0 0 0 5 5L16 12l5 2v3a2 2 0 0 1-2.2 2A16.5 16.5 0 0 1 4 5.2 2 2 0 0 1 6 3Z"/>',
+    'globe'      => '<circle cx="12" cy="12" r="9"/><path d="M3.5 9h17M3.5 15h17M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18Z"/>',
+    'shield'     => '<path d="M12 3 5 6v5.5c0 4.2 2.9 7.6 7 9.5 4.1-1.9 7-5.3 7-9.5V6Z"/><path d="m9 12 2 2 4-4"/>',
+    'play'       => '<circle cx="12" cy="12" r="9"/><path d="M10.5 9 15 12l-4.5 3Z"/>',
+    'eye'        => '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="3"/>',
+    'lock'       => '<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
+    'clock'      => '<circle cx="12" cy="12" r="9"/><path d="M12 7v5.3l3.3 2"/>',
+    'history'    => '<path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1M3.5 5v4h4"/><path d="M12 7.5v5l3.2 1.9"/>',
+    'users'      => '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><path d="M16 5.3a3.2 3.2 0 0 1 0 6.2M17.5 14.8c2.1.6 3.5 2.3 3.5 4.6"/>',
+    'user-check' => '<circle cx="10" cy="8" r="3.2"/><path d="M3.5 20c0-3.3 2.9-5.5 6.5-5.5 1 0 2 .2 2.8.5"/><path d="m15.5 17.5 2 2 4-4"/>',
+    'mic'        => '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3"/>',
+    'tag'        => '<path d="M3.5 11.2V4.5a1 1 0 0 1 1-1h6.7a1 1 0 0 1 .7.3l8.3 8.3a1 1 0 0 1 0 1.4l-6.7 6.7a1 1 0 0 1-1.4 0L3.8 11.9a1 1 0 0 1-.3-.7Z"/><circle cx="7.8" cy="7.8" r="1.3"/>',
+    'form'       => '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h4"/>',
+    'report'     => '<path d="M6 3h8l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z"/><path d="M14 3v5h5"/><path d="M9 17v-3M12 17v-5M15 17v-2"/>',
+    'calendar'   => '<rect x="3.5" y="5" width="17" height="16" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
+    'repeat'     => '<path d="M4 9V8a3 3 0 0 1 3-3h10l-3-3M20 15v1a3 3 0 0 1-3 3H7l3 3"/>',
+    'layers'     => '<path d="m12 3 9 5-9 5-9-5Z"/><path d="m3.5 12.5 8.5 4.7 8.5-4.7"/><path d="m3.5 16.8 8.5 4.7 8.5-4.7"/>',
+    'filter'     => '<path d="M3.5 5h17l-6.6 7.8V20l-3.8-2.2v-5Z"/>',
+    'building'   => '<path d="M4 21V5a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v16"/><path d="M15 10h3a2 2 0 0 1 2 2v9M8 7h3M8 11h3M8 15h3M2.5 21h19"/>',
+    'bell'       => '<path d="M6 9a6 6 0 1 1 12 0c0 4 1.5 5.5 2 6H4c.5-.5 2-2 2-6Z"/><path d="M10 19a2 2 0 0 0 4 0"/>',
+    'cpu'        => '<rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/><path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3"/>',
+    'sparkle'    => '<path d="m12 3 1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9Z"/><path d="M18.5 16.5 19 18l1.5.5-1.5.5-.5 1.5-.5-1.5L16.5 18l1.5-.5Z"/>',
+    'cloud'      => '<path d="M7 18h10.5a3.5 3.5 0 0 0 .4-7A5.5 5.5 0 0 0 7.3 9.6 4.2 4.2 0 0 0 7 18Z"/>',
+    'cloud-check'=> '<path d="M7 17.5h10a3.5 3.5 0 0 0 .4-7A5.5 5.5 0 0 0 7.3 9.1 4.2 4.2 0 0 0 7 17.5Z"/><path d="m9.5 13.5 2 2 3.5-3.5"/>',
+    'refresh'    => '<path d="M20 11a8 8 0 0 0-13.8-5.2L3.5 8.5"/><path d="M3.5 4v4.5H8"/><path d="M4 13a8 8 0 0 0 13.8 5.2l2.7-2.7"/><path d="M20.5 20v-4.5H16"/>',
+    'checklist'  => '<path d="M9 6h11M9 12h11M9 18h11"/><path d="m3.5 6 1.2 1.2L7 5M3.5 12l1.2 1.2L7 11M3.5 18l1.2 1.2L7 17"/>',
+    'geo'        => '<path d="M12 21s7-5.7 7-11a7 7 0 1 0-14 0c0 5.3 7 11 7 11Z"/><circle cx="12" cy="10" r="2.7"/>',
+    'target'     => '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1"/>',
+    'badge'      => '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10.5" r="2.2"/><path d="M5.5 16.5c.5-1.7 1.9-2.6 3.5-2.6s3 .9 3.5 2.6M15 9.5h3.5M15 13h3.5"/>',
+    'camera'     => '<path d="M4 7h3l1.5-2h7L17 7h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1Z"/><circle cx="12" cy="13" r="3.6"/>',
+    'qr'         => '<rect x="3.5" y="3.5" width="7" height="7" rx="1"/><rect x="13.5" y="3.5" width="7" height="7" rx="1"/><rect x="3.5" y="13.5" width="7" height="7" rx="1"/><path d="M13.5 13.5h3v3h-3zM20.5 13.5v3M17.5 20.5h3M13.5 20.5h1"/>',
+    'route'      => '<circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M15.5 6H10a4 4 0 0 0 0 8h4a4 4 0 0 1 0 8H8.5"/>',
+    'truck'      => '<path d="M3 6h10v10H3zM13 9.5h4l3 3.2V16h-7z"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/>',
+    'warehouse'  => '<path d="M3 21V8.5L12 4l9 4.5V21"/><path d="M7.5 21v-7h9v7M7.5 17.5h9"/>',
+    'factory'    => '<path d="M3 21V10l6 4V10l6 4V6h6v15Z"/><path d="M7 17.5h2M13 17.5h2M18 17.5h1"/>',
+    'cart'       => '<path d="M3 4h2.2l2.4 11.2a1.5 1.5 0 0 0 1.5 1.2h8.3a1.5 1.5 0 0 0 1.5-1.2L21 8H6"/><circle cx="9.5" cy="20" r="1.4"/><circle cx="17.5" cy="20" r="1.4"/>',
+    'invoice'    => '<path d="M5.5 3h13v18l-2.2-1.5-2.1 1.5-2.2-1.5L9.8 21l-2.1-1.5L5.5 21Z"/><path d="M9 8h6M9 12h6"/>',
+    'coins'      => '<ellipse cx="9" cy="7" rx="5.5" ry="2.5"/><path d="M3.5 7v5c0 1.4 2.5 2.5 5.5 2.5s5.5-1.1 5.5-2.5V7"/><path d="M14.5 11.4c3 .2 5.2 1.2 5.2 2.4v4.7c0 1.4-2.5 2.5-5.5 2.5s-5.5-1.1-5.5-2.5v-3.6"/>',
+    'server'     => '<rect x="3.5" y="4" width="17" height="6.5" rx="1.5"/><rect x="3.5" y="13.5" width="17" height="6.5" rx="1.5"/><path d="M7 7.2h.01M7 16.8h.01"/>',
+    'rack'       => '<rect x="4.5" y="3" width="15" height="18" rx="2"/><path d="M4.5 8.5h15M4.5 14h15M8 5.8h.01M8 11.2h.01M8 17.3h.01"/>',
+    'ethernet'   => '<path d="M6 10V6.5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1V10l2 2v5.5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V12Z"/><path d="M8.5 12.5v3M12 12.5v3M15.5 12.5v3"/>',
+    'wifi'       => '<path d="M2.5 8.5a15 15 0 0 1 19 0M5.8 12.2a10 10 0 0 1 12.4 0M9.2 15.8a5 5 0 0 1 5.6 0"/><circle cx="12" cy="19.3" r="1.2"/>',
+    'power'      => '<path d="M12 3v9"/><path d="M7.3 6.3a8 8 0 1 0 9.4 0"/>',
+    'zap'        => '<path d="M13.5 2 5 13.5h6L10.5 22 19 10.5h-6Z"/>',
+    'display'    => '<rect x="2.5" y="4" width="19" height="12.5" rx="2"/><path d="M8.5 20.5h7M12 16.5v4"/>',
+    'wrench'     => '<path d="M20 5.5a5 5 0 0 1-6.6 6.6L6 19.5a2.1 2.1 0 0 1-3-3l7.4-7.4A5 5 0 0 1 17 2.5l-3 3 1.5 3 3 1.5Z"/>',
+    'box'        => '<path d="m12 3 8.5 4.5v9L12 21l-8.5-4.5v-9Z"/><path d="M3.5 7.5 12 12l8.5-4.5M12 12v9"/>',
+    'chart'      => '<path d="M4 20V4M4 20h16"/><path d="M8 16.5v-4M12 16.5V8M16 16.5v-6.5"/>',
+    'gear'       => '<circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v2.2M12 19.3v2.2M4.2 12H2M22 12h-2.2M6.3 6.3 4.8 4.8M19.2 19.2l-1.5-1.5M6.3 17.7l-1.5 1.5M19.2 4.8l-1.5 1.5"/>',
+    'database'   => '<ellipse cx="12" cy="6" rx="7.5" ry="3"/><path d="M4.5 6v12c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V6M4.5 12c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3"/>',
+    'code'       => '<path d="m8.5 8-5 4 5 4M15.5 8l5 4-5 4M13.5 4.5l-3 15"/>',
+    'book'       => '<path d="M4 4.5A1.5 1.5 0 0 1 5.5 3H19v15.5H5.5A1.5 1.5 0 0 0 4 20Z"/><path d="M4 20a1.5 1.5 0 0 0 1.5 1.5H19"/>',
+    'search'     => '<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/>',
+    'image'      => '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="8.8" cy="9.8" r="1.6"/><path d="m4 17 4.8-4.5 3.4 3.2 3-2.7 4.8 4.5"/>',
+    'alert'      => '<path d="M12 3.5 21 19.5H3Z"/><path d="M12 10v4M12 16.8h.01"/>',
+    'restart'    => '<path d="M12 3v5"/><path d="M17.6 6.4a8 8 0 1 1-11.2 0"/>',
+    'login'      => '<path d="M14 3.5h4.5a1.5 1.5 0 0 1 1.5 1.5v14a1.5 1.5 0 0 1-1.5 1.5H14"/><path d="M4 12h11M11.5 8.5 15 12l-3.5 3.5"/>',
+    'paperclip'  => '<path d="M20 11.5 12.2 19.3a5 5 0 0 1-7-7L12.9 4.4a3.3 3.3 0 0 1 4.7 4.7l-7.7 7.8a1.7 1.7 0 0 1-2.4-2.4l7.2-7.2"/>',
+    'github'     => '<path d="M9 19c-4.5 1.4-4.5-2.4-6.5-2.9m13 4.9v-3.5a3 3 0 0 0-.85-2.35c2.85-.3 5.85-1.4 5.85-6.3a4.9 4.9 0 0 0-1.3-3.4 4.6 4.6 0 0 0-.1-3.4s-1.05-.3-3.5 1.3a12 12 0 0 0-6.3 0C6.85.65 5.8.95 5.8.95a4.6 4.6 0 0 0-.1 3.4A4.9 4.9 0 0 0 4.4 7.75c0 4.9 3 6 5.85 6.3a3 3 0 0 0-.85 2.3V20"/>',
+    'linkedin'   => '<path d="M15 8.5a5.5 5.5 0 0 1 5.5 5.5v6h-3.5v-6a2 2 0 0 0-4 0v6H9.5V8.8H13v1.9A4.4 4.4 0 0 1 15 8.5Z"/><rect x="2.5" y="8.8" width="3.5" height="11.2"/><circle cx="4.25" cy="4.5" r="1.9"/>',
+    ); }
+    $p = isset($d[$nombre]) ? $d[$nombre] : $d['check'];
+    $c = $clase !== '' ? ' class="' . a_e($clase) . '"' : '';
+    return '<svg' . $c . ' viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"'
+         . ' stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' . $p . '</svg>';
+}
+
+// ---------------------------------------------------------------------------
+// Piezas compartidas
+// ---------------------------------------------------------------------------
+
+/** Rejilla del ecosistema para el pie. */
+function a_ecosistema_grid($actual)
+{
+    $h = '<div class="eco-grid" data-reveal>';
+    foreach (a_familia() as $k => $p) {
+        if ($k === $actual) {
+            $h .= '<div class="eco-card" aria-current="page">';
+            $h .= '<div><b>' . a_e($p['nombre']) . '</b><span>Estás aquí</span></div></div>';
+        } else {
+            $h .= '<a class="eco-card" href="' . a_e($p['url']) . '">';
+            $h .= '<div><b>' . a_e($p['nombre']) . '</b><span>' . a_e($p['que']) . '</span></div></a>';
+        }
+    }
+    return $h . '</div>';
+}
+
+/** Encabezado de sección: índice en el riel + eyebrow + título + entradilla. */
+function a_head($idx, $eyebrow, $titulo, $lede = '', $extra = '')
+{
+    $h  = '<header class="head' . ($extra ? ' ' . a_e($extra) : '') . '" data-reveal>';
+    $h .= '<p class="idx head__idx">' . a_e($idx) . '</p>';
+    $h .= '<div class="head__main">';
+    if ($eyebrow !== '') { $h .= '<p class="eyebrow">' . a_e($eyebrow) . '</p>'; }
+    $h .= '<h2>' . $titulo . '</h2>';
+    if ($lede !== '')    { $h .= '<p class="lede">' . a_e($lede) . '</p>'; }
+    return $h . '</div></header>';
+}
+
+/**
+ * Hueco de captura.
+ * Si el archivo existe se pinta la imagen; si no, un marco con la ruta y las
+ * dimensiones que debe tener, para sustituirlo sin adivinar nada.
+ */
+function a_shot($archivo, $alt, $w, $h, $pie = '', $fig = '', $clase = '')
+{
+    $ruta   = __DIR__ . '/' . $archivo;
+    $existe = is_file($ruta);
+    $osc    = preg_replace('/\.(png|jpe?g|webp)$/i', '-oscuro.$1', $archivo);
+    $existeOsc = $osc !== $archivo && is_file(__DIR__ . '/' . $osc);
+    $o  = '<figure class="shot' . ($existe ? '' : ' shot--pendiente')
+        . ($clase ? ' ' . a_e($clase) : '') . '" data-reveal>';
+    $o .= '<div class="shot__box ticks">';
+    $o .= '<div class="shot__frame" style="--ar: ' . (int) $w . ' / ' . (int) $h . '">';
+    if ($existe) {
+        $o .= '<img src="' . a_e($archivo) . '" alt="' . a_e($alt) . '"'
+            . ($existeOsc ? ' data-theme-img="light"' : '')
+            . ' width="' . (int) $w . '" height="' . (int) $h . '" loading="lazy" decoding="async">';
+        if ($existeOsc) {
+            $o .= '<img src="' . a_e($osc) . '" alt="' . a_e($alt) . '" data-theme-img="dark"'
+                . ' width="' . (int) $w . '" height="' . (int) $h . '" loading="lazy" decoding="async">';
+        }
+    } else {
+        $o .= '<div class="shot__pending">' . a_icon('image')
+            . '<b>Captura pendiente</b>'
+            . '<code>' . a_e($archivo) . '</code>'
+            . '<small>' . (int) $w . ' × ' . (int) $h . ' px</small></div>';
+    }
+    $o .= '</div></div>';
+    if ($pie !== '') {
+        $o .= '<figcaption class="shot__cap">';
+        if ($fig !== '') { $o .= '<span class="mono">' . a_e($fig) . '</span>'; }
+        $o .= '<span>' . a_e($pie) . '</span></figcaption>';
+    }
+    return $o . '</figure>';
+}
+
+/** Conmutador de tema. Muestra el icono de lo que va a activar. */
+function a_tema($clase = 'theme-toggle')
+{
+    return '<button class="' . a_e($clase) . '" type="button" data-theme-toggle aria-label="Cambiar tema">'
+         . a_icon('moon', 'i-moon') . a_icon('sun', 'i-sun')
+         . '<span class="theme-toggle__label"></span></button>';
+}
+
+/** Bloque del autor: la persona real que desarrolla y da soporte. */
+function a_autor($cita)
+{
+    $h  = '<div class="author" data-reveal>';
+    $h .= '<img class="author__photo" src="https://gustavoquintero.dev/assets/img/my-profile-image.jpg"'
+        . ' alt="Retrato de Gustavo Quintero" width="84" height="84" loading="lazy" decoding="async">';
+    $h .= '<div><h3>Gustavo Quintero</h3>';
+    $h .= '<p class="author__role">Desarrollo y operación</p>';
+    $h .= '<blockquote><p>«' . a_e($cita) . '»</p></blockquote>';
+    $h .= '<div class="author__links">';
+    $h .= '<a href="mailto:atencion@gustavoquintero.dev">' . a_icon('mail') . 'atencion@gustavoquintero.dev</a>';
+    $h .= '<a href="https://gustavoquintero.dev" target="_blank" rel="noopener">' . a_icon('globe')
+        . 'gustavoquintero.dev' . a_icon('external') . '</a>';
+    $h .= '<a href="https://github.com/GustavoQuinteroC" target="_blank" rel="noopener">' . a_icon('github')
+        . 'GitHub' . a_icon('external') . '</a>';
+    $h .= '<a href="https://www.linkedin.com/in/gustavo-quintero-81aa18169/" target="_blank" rel="noopener">' . a_icon('linkedin')
+        . 'LinkedIn' . a_icon('external') . '</a>';
+    $h .= '</div></div></div>';
+    return $h;
+}
+
+/** Diálogo con las credenciales del demo. */
+function a_dialogo_demo($url_app)
+{
+    $h  = '<dialog id="demoDialog" aria-labelledby="demoTitulo">';
+    $h .= '<div class="dlg"><h2 id="demoTitulo">Acceso al demo</h2>';
+    $h .= '<p>Entra a la empresa de demostración con estas credenciales.</p>';
+    $h .= '<dl class="dlg__creds">';
+    $h .= '<div><dt>Usuario</dt><dd>demo@alkes.mx</dd></div>';
+    $h .= '<div><dt>Contraseña</dt><dd>Demo@Alkes2026</dd></div>';
+    $h .= '</dl>';
+    $h .= '<p>Para una demostración guiada, contacta a <strong>Gustavo Quintero</strong> al correo '
+        . '<a href="mailto:' . ALKES_MAIL . '">' . ALKES_MAIL . '</a> o al teléfono '
+        . '<a href="tel:' . ALKES_TEL . '">' . ALKES_TEL_TXT . '</a>.</p>';
+    $h .= '<div class="dlg__foot">';
+    $h .= '<a class="btn btn--primary" href="' . a_e($url_app) . '" target="_blank" rel="noopener">Ir a la app' . a_icon('external') . '</a>';
+    $h .= '<button class="btn btn--outline" type="button" data-close-demo>Cerrar</button>';
+    $h .= '</div></div></dialog>';
+    return $h;
+}
+
+
+function a_cache()
+{
+    static $d = null;
+    if ($d !== null) { return $d; }
+    $f = __DIR__ . '/planes.cache.json';
+    $d = array('producto' => array(), 'planes' => array());
+    if (is_file($f)) {
+        $j = json_decode((string) @file_get_contents($f), true);
+        if (is_array($j)) { $d = $j + $d; }
+    }
+    return $d;
+}
+
+function a_planes()         { $d = a_cache(); return isset($d['planes']) ? $d['planes'] : array(); }
+function a_producto_clave() { $d = a_cache(); return isset($d['producto']['clave']) ? $d['producto']['clave'] : ''; }
+function a_url_panel()      { $d = a_cache(); return isset($d['producto']['url_panel']) ? $d['producto']['url_panel'] : ALKES_SITIO; }
+
+function a_num($n) { return number_format((float) $n, (floor($n) == $n ? 0 : 2), '.', ','); }
+
+/** Traduce los iconos del catálogo (Bootstrap Icons) al set propio. */
+function a_map_icon($bi)
+{
+    $m = array(
+        'bi-people-fill' => 'users',            'bi-cpu-fill' => 'cpu',
+        'bi-paperclip' => 'paperclip',          'bi-tools' => 'wrench',
+        'bi-arrow-up-circle-fill' => 'refresh', 'bi-clock-history' => 'history',
+        'bi-shield-lock' => 'lock',             'bi-box-seam' => 'box',
+        'bi-box-seam-fill' => 'box',            'bi-card-checklist' => 'checklist',
+        'bi-geo-alt-fill' => 'geo',             'bi-person-badge-fill' => 'badge',
+        'bi-file-earmark-bar-graph' => 'report','bi-display-fill' => 'display',
+        'bi-ethernet' => 'ethernet',            'bi-hdd-rack-fill' => 'rack',
+        'bi-cloud-check-fill' => 'cloud-check',
+    );
+    return isset($m[$bi]) ? $m[$bi] : 'check';
+}
+
+/** Ahorro del plan anual frente a doce mensualidades. Calculado, nunca escrito. */
+function a_ahorro_anual()
+{
+    $m = array(); $a = array();
+    foreach (a_planes() as $p) {
+        if ($p['periodo'] === 'mensual') { $m[$p['clave']] = (float) $p['precio']; }
+        if ($p['periodo'] === 'anual')   { $a[$p['clave']] = (float) $p['precio']; }
+    }
+    $pcts = array();
+    foreach ($a as $k => $precio) {
+        if (!empty($m[$k]) && $m[$k] > 0) {
+            $full = $m[$k] * 12;
+            if ($full > $precio) { $pcts[$k] = (int) round((1 - $precio / $full) * 100); }
+        }
+    }
+    return $pcts ? max($pcts) : 0;
+}
+
+/** Rejilla de planes de un periodo. Los de pago único aparecen en ambos. */
+function a_grid_planes($periodo)
+{
+    $items = array();
+    foreach (a_planes() as $p) {
+        if ($p['periodo'] === $periodo || $p['periodo'] === 'unico') { $items[] = $p; }
+    }
+    if (!$items) {
+        return '<p class="center muted">Por el momento no hay planes publicados. '
+             . '<a class="link-arrow" href="mailto:' . ALKES_MAIL . '">Escríbenos' . a_icon('arrow') . '</a></p>';
+    }
+
+    $clave  = a_producto_clave();
+    $ahorro = a_ahorro_anual();
+    $h = '<div class="plans">';
+
+    foreach ($items as $p) {
+        $rec = !empty($p['recomendado']);
+        $per = $p['periodo'] === 'anual' ? 'MXN / año'
+             : ($p['periodo'] === 'unico' ? 'MXN / pago único' : 'MXN / mes');
+
+        $h .= '<div class="plan' . ($rec ? ' plan--rec' : '') . '">';
+        $h .= '<div class="plan__head"><h3 class="plan__name">' . a_e($p['nombre']) . '</h3>';
+        if ($rec) { $h .= '<span class="plan__tag">Recomendado</span>'; }
+        $h .= '</div>';
+
+        $h .= '<p class="plan__price"><span class="plan__cur">$</span>'
+            . '<span class="plan__amt">' . a_num($p['precio']) . '</span>'
+            . '<span class="plan__per">' . $per . '</span></p>';
+
+        $nota = '';
+        if (!empty($p['precio_anterior'])) {
+            $nota = 'Antes <s>$' . a_num($p['precio_anterior']) . '</s>';
+        } elseif ($p['periodo'] === 'anual') {
+            $nota = 'Equivale a $' . a_num(round($p['precio'] / 12)) . ' al mes'
+                  . ($ahorro ? ' · ahorras ' . $ahorro . ' %' : '');
+        } elseif ($p['periodo'] === 'mensual') {
+            $nota = 'Sin permanencia. Cancela cuando quieras.';
+        }
+        $h .= '<p class="plan__note">' . $nota . '</p>';
+
+        $h .= '<ul class="plan__features">';
+        foreach ($p['caracteristicas'] as $c) {
+            $h .= '<li>' . a_icon(a_map_icon(isset($c['icono']) ? $c['icono'] : ''))
+                . '<div><strong>' . a_e($c['titulo']) . '</strong>';
+            if (!empty($c['descripcion'])) { $h .= '<p>' . a_e($c['descripcion']) . '</p>'; }
+            $h .= '</div></li>';
+        }
+        $h .= '</ul>';
+
+        $url = ALKES_CENTRAL . '/?producto=' . urlencode($clave)
+             . '&plan=' . urlencode($p['clave'])
+             . '&periodo=' . urlencode($p['periodo']);
+
+        $h .= '<a class="btn ' . ($rec ? 'btn--primary' : 'btn--outline') . ' btn--block" href="' . a_e($url) . '">'
+            . 'Contratar ' . a_e($p['nombre']) . a_icon('arrow') . '</a>';
+        $h .= '</div>';
+    }
+    return $h . '</div>';
+}
+
+if (!defined('SEO_FUNDADOR_ID')) { define('SEO_FUNDADOR_ID', 'https://gustavoquintero.dev/#persona'); }
+
+/** Persona fundadora: la misma entidad que describe gustavoquintero.dev. */
+function seo_fundador()
+{
+    return array(
+        '@type' => 'Person', '@id' => SEO_FUNDADOR_ID,
+        'name' => 'Gustavo de Jesús Quintero Cerpa', 'alternateName' => 'Gustavo Quintero',
+        'jobTitle' => 'Fundador y desarrollador de Alkes',
+        'url' => 'https://gustavoquintero.dev/',
+        'sameAs' => array('https://www.linkedin.com/in/gustavo-quintero-81aa18169/', 'https://github.com/GustavoQuinteroC'),
+        'address' => array('@type' => 'PostalAddress', 'addressLocality' => 'Guadalajara', 'addressRegion' => 'Jalisco', 'addressCountry' => 'MX'),
+    );
+}
+
+/** Versión publicada más reciente, leída del historial de novedades. */
+function seo_version($dir)
+{
+    $t = (string) file_get_contents($dir . '/index.php');
+    return preg_match('/disc__v">v(\d+\.\d+\.\d+)</', $t, $m) ? $m[1] : '';
+}
+
+/**
+ * Lista de funciones y capturas a partir de los arreglos de la página.
+ * Acepta $CAPACIDADES (con 'items' e 'img'), $SOSTIENE y $AVANZADAS.
+ */
+function seo_de_pagina($sitio, $capacidades, $extras = array())
+{
+    $funciones = array();
+    $capturas = array();
+    foreach ((array) $capacidades as $c) {
+        if (!empty($c['h3'])) { $funciones[] = $c['h3']; }
+        foreach ((array) (isset($c['items']) ? $c['items'] : array()) as $it) {
+            if (is_array($it) && isset($it[1])) { $funciones[] = $it[1]; }
+        }
+        if (!empty($c['img'])) {
+            $capturas[] = array_filter(array('@type' => 'ImageObject', 'url' => $sitio . '/' . ltrim($c['img'], '/'),
+                                'caption' => isset($c['alt']) ? $c['alt'] : '',
+                                'width' => isset($c['w']) ? (int) $c['w'] : null, 'height' => isset($c['h']) ? (int) $c['h'] : null),
+                                function ($v) { return $v !== null && $v !== ''; });
+        }
+    }
+    foreach ((array) $extras as $lista) {
+        foreach ((array) $lista as $it) {
+            if (is_array($it) && isset($it[1])) { $funciones[] = $it[1]; }
+        }
+    }
+    $funciones = array_values(array_unique(array_filter($funciones)));
+    return array('funciones' => $funciones, 'capturas' => $capturas);
+}
+
+/** Etiquetas extra del <head>. $s: sitio, nombre, titulo, alt, palabras, noindex. */
+function seo_head($s)
+{
+    $e = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $sitio = $s['sitio'];
+    $og = $sitio . '/assets/img/og-image.png';
+    $out = array();
+    if (empty($s['noindex'])) {
+        $out[] = '<meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1">';
+        $out[] = '<meta name="googlebot" content="index, follow, max-image-preview:large, max-snippet:-1">';
+        $out[] = '<meta name="bingbot" content="index, follow, max-image-preview:large, max-snippet:-1">';
+    }
+    $out[] = '<meta name="keywords" content="' . $e(implode(', ', $s['palabras'])) . '">';
+    $out[] = '<meta name="application-name" content="' . $e($s['nombre']) . '">';
+    $out[] = '<meta name="apple-mobile-web-app-title" content="' . $e($s['nombre']) . '">';
+    $out[] = '<meta name="creator" content="Gustavo Quintero">';
+    $out[] = '<meta name="publisher" content="Alkes">';
+    $out[] = '<meta name="classification" content="Software empresarial en la nube">';
+    $out[] = '<meta name="language" content="es-MX">';
+    $out[] = '<meta name="geo.region" content="MX-JAL">';
+    $out[] = '<meta name="geo.placename" content="Guadalajara, Jalisco, México">';
+    $out[] = '<meta name="geo.position" content="20.6597;-103.3496">';
+    $out[] = '<meta name="ICBM" content="20.6597, -103.3496">';
+    $out[] = '<link rel="alternate" hreflang="es-MX" href="' . $sitio . '/">';
+    $out[] = '<link rel="alternate" hreflang="es" href="' . $sitio . '/">';
+    $out[] = '<link rel="alternate" hreflang="x-default" href="' . $sitio . '/">';
+    $out[] = '<link rel="alternate" type="text/markdown" title="Resumen para modelos de lenguaje" href="' . $sitio . '/llms.txt">';
+    $out[] = '<link rel="sitemap" type="application/xml" href="' . $sitio . '/sitemap.xml">';
+    $out[] = '<link rel="author" href="https://gustavoquintero.dev/">';
+    $out[] = '<meta property="og:image:secure_url" content="' . $og . '">';
+    $out[] = '<meta property="og:image:type" content="image/png">';
+    $out[] = '<meta name="twitter:image:alt" content="' . $e($s['alt']) . '">';
+    return implode("\n", $out) . "\n";
+}
+
+/**
+ * Enriquece el grafo JSON-LD que arma cada landing.
+ * $s: sitio, nombre, subcategoria, palabras, version, funciones, capturas,
+ *     dispositivos, requisitos, titulo.
+ */
+function seo_enriquecer($g, $s)
+{
+    if (empty($s) || empty($g['@graph'])) { return $g; }
+    $sitio = $s['sitio'];
+    $org = ALKES_SITIO . '/#org';
+    foreach ($g['@graph'] as $i => $n) {
+        $tipo = isset($n['@type']) ? $n['@type'] : '';
+        if ($tipo === 'Organization') {
+            $g['@graph'][$i] = array_merge($n, array(
+                'alternateName' => array('Alkes Software y Soluciones TI', 'Alkes TI'),
+                'description' => 'Empresa de software y soluciones TI en Guadalajara, Jalisco. Desarrolla y opera sistemas en la nube para empresas mexicanas: ERP con CFDI 4.0, pendientes con IA, control de asistencia, mantenimiento y reinicio remoto de equipos.',
+                'logo' => array('@type' => 'ImageObject', 'url' => ALKES_SITIO . '/assets/img/logo_alkes.png'),
+                'address' => array('@type' => 'PostalAddress', 'addressLocality' => 'Guadalajara', 'addressRegion' => 'Jalisco', 'addressCountry' => 'MX'),
+                'areaServed' => array('@type' => 'Country', 'name' => 'México'),
+                'founder' => array('@id' => SEO_FUNDADOR_ID),
+                'foundingLocation' => array('@type' => 'Place', 'name' => 'Guadalajara, Jalisco, México'),
+                'contactPoint' => array('@type' => 'ContactPoint', 'contactType' => 'Ventas y soporte', 'telephone' => ALKES_TEL,
+                                        'email' => ALKES_MAIL, 'areaServed' => 'MX', 'availableLanguage' => array('es')),
+                'knowsAbout' => array('Software empresarial', 'ERP', 'Facturación electrónica CFDI 4.0', 'Gestión de pendientes',
+                                      'Control de asistencia', 'Mantenimiento preventivo', 'Internet de las cosas', 'Inteligencia artificial'),
+            ));
+        } elseif ($tipo === 'SoftwareApplication') {
+            $extra = array(
+                'applicationSubCategory' => $s['subcategoria'],
+                'keywords' => implode(', ', $s['palabras']),
+                'countriesSupported' => 'MX',
+                'availableOnDevice' => $s['dispositivos'],
+                'browserRequirements' => $s['requisitos'],
+                'provider' => array('@id' => $org),
+                'creator' => array('@id' => SEO_FUNDADOR_ID),
+                'author' => array('@id' => SEO_FUNDADOR_ID),
+                'isAccessibleForFree' => false,
+                'mainEntityOfPage' => array('@id' => $sitio . '/#pagina'),
+            );
+            if (!empty($s['version'])) {
+                $extra['softwareVersion'] = $s['version'];
+                $extra['releaseNotes'] = $sitio . '/#novedades';
+            }
+            if (!empty($s['funciones'])) { $extra['featureList'] = $s['funciones']; }
+            if (!empty($s['capturas'])) { $extra['screenshot'] = $s['capturas']; }
+            $g['@graph'][$i] = array_merge($n, $extra);
+        } elseif ($tipo === 'WebSite') {
+            $g['@graph'][$i] = array_merge($n, array(
+                'description' => $s['titulo'],
+                'creator' => array('@id' => SEO_FUNDADOR_ID),
+                'copyrightHolder' => array('@id' => $org),
+            ));
+        }
+    }
+    $g['@graph'][] = array(
+        '@type' => 'WebPage', '@id' => $sitio . '/#pagina', 'url' => $sitio . '/', 'name' => $s['titulo'],
+        'isPartOf' => array('@id' => $sitio . '/#web'), 'about' => array('@id' => $sitio . '/#app'),
+        'mainEntity' => array('@id' => $sitio . '/#app'), 'inLanguage' => 'es-MX',
+        'primaryImageOfPage' => array('@type' => 'ImageObject', 'url' => $sitio . '/assets/img/og-image.png', 'width' => 1200, 'height' => 630),
+        'breadcrumb' => array('@id' => $sitio . '/#migas'),
+        'dateModified' => date('Y-m-d', (int) @filemtime(__DIR__ . '/index.php')),
+        'publisher' => array('@id' => $org),
+    );
+    $g['@graph'][] = array(
+        '@type' => 'BreadcrumbList', '@id' => $sitio . '/#migas',
+        'itemListElement' => array(
+            array('@type' => 'ListItem', 'position' => 1, 'name' => 'Alkes', 'item' => ALKES_SITIO . '/'),
+            array('@type' => 'ListItem', 'position' => 2, 'name' => $s['nombre'], 'item' => $sitio . '/'),
+        ),
+    );
+    $g['@graph'][] = seo_fundador();
+    return $g;
+}
+
 
 $URL_APP = ER_APP;
 $PROD    = 'erp';
@@ -142,7 +889,7 @@ function er_reportes_items($lista)
 }
 ?>
 <?php
-// SEO y GEO: datos para seo_head() y seo_enriquecer() (ver _seo.php).
+// SEO y GEO: datos para seo_head() y seo_enriquecer() (ver seo_head).
 $SEO_PAG = seo_de_pagina(ER_SITIO, isset($CAPACIDADES) ? $CAPACIDADES : array(), array($SOSTIENE, $AVANZADAS));
 $SEO = array(
     'sitio' => ER_SITIO, 'nombre' => 'Alkes ERP', 'titulo' => $TITULO, 'noindex' => $NOINDEX,
@@ -543,7 +1290,588 @@ $SEO = array(
             <p class="lede">Historial público de versiones: lo que se entregó, cuándo y qué cambia en tu trabajo diario.</p>
         </header>
         <div data-reveal>
-            <?php include __DIR__ . '/_novedades_recientes.php'; ?>
+                        <details class="disc disc--latest" open>
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.9.0</span>
+                    <span class="disc__t">Cada registro muestra solo lo que puedes hacer</span>
+                    <span class="disc__d">26 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Botones según el estado</strong><p>Un documento timbrado, cancelado o terminado ya no ofrece acciones que no le corresponden, como cambiar el almacén o agregar partidas.</p></div></li>
+                    <li><div><strong>El expediente se conserva</strong><p>En un documento cerrado puedes seguir subiendo archivos, pero ya no se borran.</p></div></li>
+                    <li><div><strong>Cuentas vencidas y en disputa</strong><p>Las cuentas por cobrar y por pagar se marcan solas como vencidas, y puedes poner una en disputa: conserva su saldo y no recibe abonos hasta resolverla.</p></div></li>
+                    <li><div><strong>Pagos por confirmar</strong><p>Registra un cheque o una transferencia por verificar: no baja el saldo hasta que lo confirmas, y si rebota queda anotado.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.8.3</span>
+                    <span class="disc__t">Imprime el acuse de cancelación</span>
+                    <span class="disc__d">24 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Botón «Acuse de cancelación»</strong><p>En facturas, notas de crédito, complementos de pago y facturas globales canceladas aparece junto a Imprimir y abre el acuse del SAT en el visor.</p></div></li>
+                    <li><div><strong>Formato completo</strong><p>Emisor, receptor, UUID, total, fechas, motivo de cancelación, estatus ante el SAT y su sello digital.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.8.2</span>
+                    <span class="disc__t">Registro completo de cada timbrado</span>
+                    <span class="disc__d">24 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Todo queda guardado</strong><p>Cada timbrado, cancelación y consulta de estatus guarda el comprobante y la respuesta completa del servicio de timbrado, para aclarar cualquier rechazo sin adivinar.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.8.1</span>
+                    <span class="disc__t">Mejora interna del manejo de archivos</span>
+                    <span class="disc__d">24 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Sin cambios en tu forma de trabajar</strong><p>Se ordenó el código que guarda tus archivos para que sea el mismo en todos los sistemas de Alkes.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.8.0</span>
+                    <span class="disc__t">Mi nube: tus archivos en un solo lugar</span>
+                    <span class="disc__d">23 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Mi nube</strong><p>En el menú de tu nombre, después de «Mi perfil y ajustes»: todos tus archivos con el documento y folio al que pertenecen, para verlos, descargarlos, borrarlos o subir archivos sueltos. Cada quien ve solo lo suyo.</p></div></li>
+                    <li><div><strong>Tu espacio, siempre a la vista</strong><p>Cada usuario tiene su propio espacio y una barra junto a los adjuntos te dice cuánto llevas usado.</p></div></li>
+                    <li><div><strong>Adjuntos en tabla</strong><p>Los adjuntos de cada documento se ven en una tabla con búsqueda y orden; el borrado queda en el historial del documento.</p></div></li>
+                    <li><div><strong>Archivos mejor protegidos</strong><p>Cada archivo se revisa por su contenido real y solo se descarga con permiso.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.7.2</span>
+                    <span class="disc__t">Claves de clientes y proveedores sin choques</span>
+                    <span class="disc__d">23 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Una sola serie de claves</strong><p>Dar de alta un cliente o proveedor desde cualquier sucursal ya no choca con las claves que dio otra.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.7.1</span>
+                    <span class="disc__t">Los folios arrancan en 1</span>
+                    <span class="disc__d">20 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Primer folio correcto</strong><p>El primer documento de una sucursal nueva sale con folio 00001.</p></div></li>
+                    <li><div><strong>Próximo folio exacto</strong><p>En Sucursales, «Próximo folio» muestra el folio que realmente se va a emitir.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.7.0</span>
+                    <span class="disc__t">Inventario físico</span>
+                    <span class="disc__d">20 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Cuenta un almacén completo o parcial</strong><p>Prepara, cuenta, revisa y aplica. Varias personas capturan a la vez, con lector de código de barras y conteo ciego.</p></div></li>
+                    <li><div><strong>Diferencias con su póliza</strong><p>Las diferencias se valúan, cada una lleva su motivo y al aplicarlas se generan los movimientos y la póliza.</p></div></li>
+                    <li><div><strong>Bloqueo mientras se cuenta</strong><p>Opcional: nadie vende, recibe ni traspasa un producto que se está contando.</p></div></li>
+                    <li><div><strong>Hoja de conteo, diferencias y acta</strong><p>En PDF, y el acta se puede enviar por correo. Tres reportes nuevos en Almacén.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.6.6</span>
+                    <span class="disc__t">Cobrar y timbrar la factura global sin tropiezos</span>
+                    <span class="disc__d">20 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Corregido</strong><p>En el punto de venta, Cobrar vuelve a abrir su confirmación, y lo mismo «Generar y timbrar» en las facturas globales.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.6.5</span>
+                    <span class="disc__t">Cancelaciones de CFDI a prueba de errores</span>
+                    <span class="disc__d">20 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Se revisa antes de llamar al SAT</strong><p>Si algo impediría revertir inventario, cuentas o pólizas, se avisa antes de cancelar ante el SAT.</p></div></li>
+                    <li><div><strong>Cancelación en tres pasos</strong><p>Si el SAT cancela pero el sistema no alcanza a completar, el documento lo dice y el botón «Completar cancelación» lo termina.</p></div></li>
+                    <li><div><strong>Consultar estatus SAT resuelve más casos</strong><p>Si el receptor rechaza la cancelación, el documento vuelve a estar vigente y se puede cancelar otra vez.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.6.4</span>
+                    <span class="disc__t">Encuentra la clave SAT de tus productos</span>
+                    <span class="disc__d">17 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Buscador de clave SAT</strong><p>Escribe qué vendes y te muestra las claves que coinciden, o explora por categoría: productos o servicios, segmento, clase y producto. Un clic llena la clave y su descripción.</p></div></li>
+                    <li><div><strong>Datos fiscales más ordenados</strong><p>Unidad, moneda, clave y descripción quedan alineadas en dos columnas.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.6.3</span>
+                    <span class="disc__t">Formulario de productos más ordenado</span>
+                    <span class="disc__d">17 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Cuatro columnas</strong><p>El encabezado del producto se reparte en datos básicos, costos y precios, estado y clasificación, y la descripción es más compacta.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.6.2</span>
+                    <span class="disc__t">Captura más a prueba de errores</span>
+                    <span class="disc__d">17 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Valores imposibles rechazados</strong><p>Descuentos, días de crédito, montos, tipos de cambio y otros campos ahora tienen mínimos y máximos razonables.</p></div></li>
+                    <li><div><strong>Códigos postales con cero</strong><p>Los códigos que empiezan con cero (como los de la Ciudad de México) ya se guardan completos.</p></div></li>
+                    <li><div><strong>Teléfono, sitio web y cuenta</strong><p>Se revisa su formato en clientes y proveedores.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.6.1</span>
+                    <span class="disc__t">Dos errores de captura de productos</span>
+                    <span class="disc__d">17 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Servicios sin costo</strong><p>Un servicio ya se puede guardar sin costo, y un producto que no se vende sin precio.</p></div></li>
+                    <li><div><strong>Productos con historial</strong><p>Guardar un producto normal que ya aparece en facturas o cotizaciones dejó de marcar un error de kit.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.6.0</span>
+                    <span class="disc__t">Contabilidad por clase de inventario</span>
+                    <span class="disc__d">17 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Cada producto, su cuenta</strong><p>Mercancías, materias primas, semiterminados, productos terminados y consumibles ahora se registran en la cuenta que les corresponde.</p></div></li>
+                    <li><div><strong>Pólizas que reparten solas</strong><p>Recepciones, movimientos de almacén, producción, remisiones, facturas, devoluciones y tickets arman la póliza por clase.</p></div></li>
+                    <li><div><strong>Consumibles al gasto</strong><p>En Configuración puedes elegir gastar los consumibles al comprarlos.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.5.0</span>
+                    <span class="disc__t">Siete tipos de producto</span>
+                    <span class="disc__d">17 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Cada producto dice qué es</strong><p>Mercancía para reventa, materia prima, semiterminado, producto terminado, consumibles, activo fijo y servicio.</p></div></li>
+                    <li><div><strong>Solo donde corresponde</strong><p>Cada producto aparece únicamente en los documentos donde puede usarse, y el tipo se bloquea cuando ya tiene movimientos.</p></div></li>
+                    <li><div><strong>Asistente para elegir tipo</strong><p>Cinco preguntas te sugieren el tipo correcto.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.4.4</span>
+                    <span class="disc__t">Dos mejoras de seguridad</span>
+                    <span class="disc__d">17 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Historial solo de tu empresa</strong><p>El historial de un documento solo se consulta dentro de tu empresa.</p></div></li>
+                    <li><div><strong>Módulos apagados bien cerrados</strong><p>Un módulo apagado ya no entrega datos en sus listados.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.4.3</span>
+                    <span class="disc__t">Modal de notas de partida más limpio</span>
+                    <span class="disc__d">17 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Sin huecos ni íconos sobrantes</strong><p>Las ventanas de captura ya no muestran una fila vacía ni dejan una columna en blanco.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.4.2</span>
+                    <span class="disc__t">Archivos adjuntos en lista</span>
+                    <span class="disc__d">17 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Vista de lista</strong><p>Los archivos adjuntos se abren siempre en lista.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.4.1</span>
+                    <span class="disc__t">Notas y archivos lado a lado</span>
+                    <span class="disc__d">17 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Mejor aprovechado</strong><p>Las notas internas y los archivos adjuntos van en la misma fila; en celular, uno sobre otro.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.4.0</span>
+                    <span class="disc__t">Notas internas en todos los documentos</span>
+                    <span class="disc__d">17 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Notas que no salen de tu empresa</strong><p>Varias notas por documento, con autor y fecha. Nunca se imprimen ni se envían por correo.</p></div></li>
+                    <li><div><strong>Con historial</strong><p>Cada alta, edición y eliminación queda en el historial del documento.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.3.1</span>
+                    <span class="disc__t">Archivos adjuntos en catálogos y ajustes</span>
+                    <span class="disc__d">16 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Más pantallas</strong><p>Almacenes, usuarios, sucursales, recetas, beneficios, capacitaciones, cajas, encuestas y recompensas también aceptan archivos.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.3.0</span>
+                    <span class="disc__t">Archivos adjuntos en todo el ERP</span>
+                    <span class="disc__d">16 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>36 pantallas más</strong><p>Cotizaciones, remisiones, notas de crédito, complementos de pago, tickets, cortes de caja y más aceptan archivos, con los mismos límites.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.2.3</span>
+                    <span class="disc__t">El visor de PDF funciona en el celular</span>
+                    <span class="disc__d">16 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>PDF dentro del mismo visor</strong><p>En Chrome para Android y otros navegadores sin visor propio, el PDF ahora se ve en el modal, página por página, con su botón Descargar.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.2.2</span>
+                    <span class="disc__t">PDF adjuntos en el celular</span>
+                    <span class="disc__d">16 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Visor de PDF en el celular</strong><p>Los PDF adjuntos ya se ven dentro del visor en navegadores sin visor propio.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.2.1</span>
+                    <span class="disc__t">Visor de archivos adjuntos</span>
+                    <span class="disc__d">16 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Gestor de archivos</strong><p>Los adjuntos se ven en cuadrícula o lista, con miniaturas; imágenes en galería y PDF, audio, video y texto en un visor con botón Descargar.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.2.0</span>
+                    <span class="disc__t">Archivos adjuntos en documentos</span>
+                    <span class="disc__d">16 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Facturas, cuentas por pagar y órdenes de compra</strong><p>Arrastra o elige varios archivos a la vez, con barra de avance. Hasta 10 MB por archivo, 20 por documento y 1 GB por persona.</p></div></li>
+                    <li><div><strong>Seguros</strong><p>Se rechazan ejecutables, scripts y páginas web.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.1.6</span>
+                    <span class="disc__t">«Recuérdame» en hasta 5 equipos</span>
+                    <span class="disc__d">16 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Cada equipo se recuerda por separado</strong><p>Puedes recordar hasta 5 equipos a la vez; al recordar el sexto se olvida el que lleva más tiempo sin usarse.</p></div></li>
+                    <li><div><strong>Lista en Mi perfil</strong><p>En Mi perfil › Seguridad ves tus equipos recordados con navegador, sistema, IP y último uso, y puedes olvidar el que quieras.</p></div></li>
+                    <li><div><strong>Más seguro</strong><p>Cerrar sesión olvida solo ese equipo, y cambiar la contraseña o dar de baja a un usuario olvida sus equipos recordados. Cada persona inicia sesión una vez más y vuelve a marcar «Recordarme».</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.1.5</span>
+                    <span class="disc__t">Recuperar contraseña y acceso desde el celular</span>
+                    <span class="disc__d">16 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Recupera tu contraseña desde el acceso</strong><p>Escribes tu correo, recibes un código de 6 dígitos que vence a los 15 minutos y con él pones tu contraseña nueva.</p></div></li>
+                    <li><div><strong>Acceso cómodo en el celular</strong><p>La pantalla de acceso se ajusta a cualquier tamaño, en vertical y en horizontal, sin hacer scroll ni tapar la tarjeta con el teclado.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.1.4</span>
+                    <span class="disc__t">Sin avisos al salir de un formulario</span>
+                    <span class="disc__d">15 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Sales cuando quieres</strong><p>Ya no aparece la advertencia del navegador al pulsar Regresar, recargar o cerrar la pestaña mientras editas un documento.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.1.3</span>
+                    <span class="disc__t">Todas las tablas se ordenan igual</span>
+                    <span class="disc__d">15 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Un solo control de orden</strong><p>Las partidas con Backorders y los reportes ahora ordenan desde el encabezado con el mismo menú (ascendente, descendente, limpiar) que el resto de las tablas.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.1.2</span>
+                    <span class="disc__t">Encabezado de los documentos más limpio</span>
+                    <span class="disc__d">15 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Más espacio en el encabezado</strong><p>Quitamos de debajo del encabezado de cada documento la línea de estados y los renglones «Viene de» y «Se generó».</p></div></li>
+                    <li><div><strong>Todo en el botón Información</strong><p>El panel Información ahora muestra, arriba del historial, de qué documento viene el actual y qué se generó de él, con un enlace a cada uno y su estado.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.1.1</span>
+                    <span class="disc__t">Botones iguales y en el mismo orden en todos los módulos</span>
+                    <span class="disc__d">15 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Cada botón, siempre del mismo color</strong><p>Guardar y Borrador en azul, Procesar en verde, Cancelar y Eliminar en rojo, todas las autorizaciones en amarillo, Imprimir y Regresar en gris. Los mismos colores en todos los módulos.</p></div></li>
+                    <li><div><strong>Siempre en el mismo orden</strong><p>De izquierda a derecha, por relevancia: primero guardar, luego las acciones, las cancelaciones y las autorizaciones. Al extremo derecho van Enviar, Información y Regresar.</p></div></li>
+                    <li><div><strong>Sin menús escondidos</strong><p>Todos los botones están a la vista, uno por uno, rellenos y con su ícono. Ya no hay botones de solo contorno ni menús «Más».</p></div></li>
+                    <li><div><strong>Mejor en el celular</strong><p>En pantallas chicas los botones muestran solo su ícono para que quepan, y la acción principal conserva su texto.</p></div></li>
+                    <li><div><strong>El botón de correo, más corto</strong><p>Ahora se llama simplemente Enviar.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.1.0</span>
+                    <span class="disc__t">Envía tus documentos por correo, desde el sistema</span>
+                    <span class="disc__d">15 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Un botón para enviar</strong><p>Facturas, notas de crédito, complementos de pago, cotizaciones, remisiones, órdenes de compra y más llevan el botón «Enviar». Se abre una ventana con el correo de tu cliente o proveedor, el asunto y el mensaje ya escritos, y los archivos marcados: el PDF y, en los fiscales, el XML.</p></div></li>
+                    <li><div><strong>Correos limpios, que sí llegan</strong><p>Un diseño sencillo que se ve bien en el celular y en modo oscuro, sin enlaces ni botones. El documento viaja como archivo adjunto y cada envío queda anotado en el historial del documento.</p></div></li>
+                    <li><div><strong>Varios contactos por cliente y proveedor</strong><p>Registra a quien recibe las facturas, a quien cobra y a quien compra, y marca qué documentos le corresponden a cada uno. Al enviar, el sistema propone a quien toca.</p></div></li>
+                    <li><div><strong>Solicitudes de cotización, una por proveedor</strong><p>Al pedir precio a varios proveedores se manda un correo distinto a cada uno, con su nombre, y ninguno ve a los demás.</p></div></li>
+                    <li><div><strong>El correo de tu empresa</strong><p>En Configuración › Correo eliges a dónde contestan tus clientes y la firma y el pie de tus correos. Si prefieres, envías con el servidor de correo de tu empresa y los correos salen desde tu propio dominio.</p></div></li>
+                    <li><div><strong>Bitácora de correos más completa</strong><p>El reporte muestra qué se envió, a quién, con qué archivos y por qué medio.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.0.3</span>
+                    <span class="disc__t">Formularios más claros, con ícono en cada campo</span>
+                    <span class="disc__d">14 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Un ícono en cada campo</strong><p>Cada dato que capturas lleva su ícono al lado izquierdo, para reconocer de un vistazo qué se pide.</p></div></li>
+                    <li><div><strong>Nombre y campo en la misma línea</strong><p>El nombre del campo queda a la izquierda y el campo a su derecha, en todos los formularios y ventanas.</p></div></li>
+                    <li><div><strong>Tarjetas con título e ícono</strong><p>Cada bloque de una pantalla se identifica con su ícono y su título.</p></div></li>
+                    <li><div><strong>Configuración y datos para facturar con el mismo orden</strong><p>Las pantallas de Configuración, suscripción y datos para facturar siguen el mismo acomodo que el resto del sistema.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.0.2</span>
+                    <span class="disc__t">Cobro por usuario y cupo editable</span>
+                    <span class="disc__d">13 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Tú decides cuántos usuarios contratas</strong><p>Ya no hay planes ni topes por tipo de usuario. Contratas un número de usuarios y cada persona activa ocupa un lugar, sea cual sea su rol.</p></div></li>
+                    <li><div><strong>Cambia tu cupo desde Parámetros</strong><p>El administrador sube o baja el total de varios en varios, con una vista previa del cobro. Al subir, se cobra de inmediato la parte proporcional del periodo.</p></div></li>
+                    <li><div><strong>Bajar el cupo, sin sorpresas</strong><p>La reducción queda programada para la renovación y nunca baja de los usuarios activos. Si cambias de opinión, pides de nuevo el total actual y se cancela.</p></div></li>
+                    <li><div><strong>Aviso si el cupo está lleno</strong><p>Al dar de alta o reactivar un usuario con el cupo lleno, el sistema avisa en lugar de cobrar por su cuenta. Desactivar un usuario no cambia el cobro.</p></div></li>
+                    <li><div><strong>Timbres CFDI por usuario</strong><p>Cada usuario contratado incluye 100 timbres al mes para facturar en producción.</p></div></li>
+                    <li><div><strong>Contacto en los documentos</strong><p>La dirección elegida en los documentos de compras y ventas lleva la persona de contacto y sus teléfonos.</p></div></li>
+                    <li><div><strong>Aviso de cupo excedido en el Inicio</strong><p>Si tras una renovación hay más usuarios activos que el cupo, el Inicio lo muestra con el plazo para regularizar.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.0.1</span>
+                    <span class="disc__t">Un menú en el orden en que trabajas</span>
+                    <span class="disc__d">9 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <h4 class="disc__group">Resumen de la versión</h4>
+                    <ul>
+                    <li><div><strong>Lo diario, hasta arriba</strong><p>Inicio, Por autorizar y Calendario abren el menú en su propia sección, Trabajo diario, como en Mantis, SmartPend y GeoCheck.</p></div></li>
+                    <li><div><strong>Cada área sigue su flujo</strong><p>Primero el catálogo, luego los pasos en su orden real y al final los reportes: en Compras, Recepciones ya va antes de Backorder, y en Producción, Calidad sigue a Terminaciones.</p></div></li>
+                    <li><div><strong>Finanzas empieza por lo de todos los días</strong><p>Cuentas por cobrar, Cuentas por pagar y Gastos van primero; Tesorería, Contabilidad e Impuestos después.</p></div></li>
+                    <li><div><strong>Reportes en el mismo orden que el menú</strong><p>Las categorías de reportes siguen el orden de las áreas, de Ventas a Sistema.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v2.0.0</span>
+                    <span class="disc__t">Interfaz renovada, un inicio que dice qué atender y autorizaciones en un solo lugar</span>
+                    <span class="disc__d">9 oct 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <h4 class="disc__group">Resumen de la versión</h4>
+                    <ul>
+                    <li><div><strong>Interfaz renovada de punta a punta</strong><p>Alkes ERP estrena diseño completo, el mismo de Mantis, SmartPend y GeoCheck. El encabezado, el menú y el pie se quedan fijos mientras trabajas, y se usa igual de cómodo en el celular que en la computadora. Tema claro, oscuro o automático, 20 colores de énfasis y un modo compacto para ver más filas.</p></div></li>
+                    <li><div><strong>Un inicio que dice qué atender</strong><p>Ventas del mes, cartera vencida, pagos de los próximos días y lo que espera autorización, cada uno con su acceso directo. Además, facturado contra cobrado de los últimos doce meses, lo más vendido, productos bajo mínimo, órdenes de producción en curso y la actividad reciente.</p></div></li>
+                    <li><div><strong>Por autorizar, en una sola bandeja</strong><p>Todo documento que espera tu autorización, de cualquier área, con quién lo pidió, desde cuándo y por cuánto. El menú muestra cuántos hay pendientes.</p></div></li>
+                    <li><div><strong>Avisos en la campana, los que tú elijas</strong><p>Te avisa cuando un documento espera tu autorización, cuando autorizan o rechazan uno tuyo y cuando se timbra o se cancela ante el SAT. Un interruptor por tipo de aviso decide cuáles recibes.</p></div></li>
+                    <li><div><strong>Calendario de la operación</strong><p>Vencimientos por cobrar y por pagar, entregas de compras, fechas requeridas de producción, declaraciones, fin de contratos y cierres de oportunidades, en vista de mes o de lista. Un clic abre el documento.</p></div></li>
+                    <li><div><strong>Tableros de oportunidades y de producción</strong><p>Las oportunidades por etapa, con el importe de cada columna, y las órdenes de producción por estado, con su avance. Arrastrar una tarjeta abre la misma acción del documento, con su confirmación.</p></div></li>
+                    <li><div><strong>Cada documento cuenta su historia</strong><p>Los botones aparecen según el estado del documento, con la siguiente acción a la mano. Se ve de qué documento viene y cuáles generó, su historial en línea de tiempo y el seguimiento como conversación.</p></div></li>
+                    <li><div><strong>Búsqueda en todo el sistema</strong><p>Escribe un folio, un cliente o un producto en la barra de arriba, desde cualquier pantalla. Solo aparece lo que tú puedes abrir.</p></div></li>
+                    <li><div><strong>Reportes con gráficas y periodos listos</strong><p>Hoy, esta semana, este mes, el trimestre o el año en un clic; los indicadores del periodo arriba de la gráfica y una impresión limpia, con el encabezado de tu empresa.</p></div></li>
+                    <li><div><strong>Punto de venta para el mostrador</strong><p>El cobro abre con el menú plegado y atajos de teclado: F2 cobrar, F3 buscar producto, F4 cliente y Esc para volver al lector. En el celular, los importes abren el teclado numérico.</p></div></li>
+                    <li><div><strong>Contabilidad e inventario más claros</strong><p>La póliza dice si está cuadrada o cuánto falta, el catálogo de cuentas se recorre como árbol, el inventario se consulta por almacén y una pestaña reúne lo que está bajo mínimo. La orden de producción muestra lo terminado y lo surtido.</p></div></li>
+                    <li><div><strong>Mi perfil y ajustes, sin salir de lo que haces</strong><p>Desde tu nombre, arriba a la derecha: tus datos, la contraseña, la apariencia, tus avisos y tu actividad. Los sellos digitales se suben arrastrando el archivo.</p></div></li>
+                    <li><div><strong>Manual de usuario dentro del sistema</strong><p>Abre la ayuda en la pregunta de la pantalla donde estás, con buscador.</p></div></li>
+                    <li><div><strong>Encuestas con mejor cara</strong><p>La encuesta que reciben tus clientes lleva tu logo, se ve bien en el celular y se responde con botones grandes.</p></div></li>
+                    </ul>
+                    <h4 class="disc__group">Impacto en tu día a día</h4>
+                    <ul>
+                    <li><div><strong>Los mismos flujos, con otra cara</strong><p>Capturar, procesar, autorizar, timbrar y cancelar se hace igual y con las mismas reglas. Tus documentos, permisos y configuración siguen como estaban.</p></div></li>
+                    <li><div><strong>Para ordenar y filtrar, el botón de cada columna</strong><p>En los listados cada columna trae su botón para ordenar y su propio filtro; las acciones se quedan fijas a la derecha.</p></div></li>
+                    <li><div><strong>Imprimir y descargar, en el menú Más</strong><p>En cada documento, Imprimir, Información, Seguimiento y las descargas se agrupan en el botón Más, junto a las acciones principales.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+            <details class="disc">
+                <summary class="disc__sum">
+                    <span class="disc__v">v1.0.0</span>
+                    <span class="disc__t">Primera versión de Alkes ERP</span>
+                    <span class="disc__d">jun 2026</span>
+                    <?= a_icon('chevron', 'disc__chev') ?>
+                </summary>
+                <div class="disc__body">
+                    <ul>
+                    <li><div><strong>Compras, Ventas y Almacén</strong><p>Del pedido a la recepción, de la cotización a la factura y el control de existencias, con lotes, series y paquetes.</p></div></li>
+                    <li><div><strong>Facturación electrónica</strong><p>Facturas, complementos de pago y notas de crédito con timbrado ante el SAT.</p></div></li>
+                    <li><div><strong>Producción, Finanzas y Recursos humanos</strong><p>Recetas y órdenes de producción, cuentas por cobrar y por pagar, pólizas contables y comisiones.</p></div></li>
+                    <li><div><strong>Proyectos, Atención al cliente y Contratos</strong><p>Seguimiento de proyectos, oportunidades, tickets de soporte y contratos con precio y compromiso pactados.</p></div></li>
+                    <li><div><strong>Varias empresas y sucursales</strong><p>Cada empresa y sucursal ve solo su información, con permisos por usuario y módulo.</p></div></li>
+                    </ul>
+                </div>
+            </details>
+
         </div>
     </div>
 </section>
@@ -633,10 +1961,10 @@ $SEO = array(
             <div class="footer__col">
                 <h2 class="footer__h">Legal</h2>
                 <ul>
-                    <li><a href="/terminos/">Términos y condiciones</a></li>
-                    <li><a href="/privacidad/">Aviso de privacidad</a></li>
-                    <li><a href="/cookies/">Cookies</a></li>
-                    <li><a href="/encargo-de-datos/">Tratamiento de datos</a></li>
+                    <li><a href="/terminos.html">Términos y condiciones</a></li>
+                    <li><a href="/privacidad.html">Aviso de privacidad</a></li>
+                    <li><a href="/cookies.html">Cookies</a></li>
+                    <li><a href="/encargo-de-datos.html">Tratamiento de datos</a></li>
                 </ul>
             </div>
             <div class="footer__col">
